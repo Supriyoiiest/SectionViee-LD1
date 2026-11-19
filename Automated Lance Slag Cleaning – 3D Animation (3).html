@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Automated Lance Slag Cleaning – 3D Animation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--fg:#ece9e2;--mut:#a39f94;--pan:rgba(18,20,24,.82);--ac:#ff7a2a}
+html,body{height:100%;margin:0;background:#0b0c0f;color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+canvas{display:block;touch-action:none}
+.p{position:fixed;background:var(--pan);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 14px;backdrop-filter:blur(6px)}
+#t{top:calc(10px + env(safe-area-inset-top,0px));left:10px;max-width:60vw}
+#t b{font-size:15px}#t div{font-size:12px;color:var(--mut);margin-top:2px}
+#pr{top:calc(10px + env(safe-area-inset-top,0px));right:10px;width:210px;padding:8px 10px}
+#pr canvas{width:100%;height:80px}#pr small{display:block;font-size:11px;color:var(--mut)}
+#cap{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px))}
+#cap h3{margin:0 0 3px;font-size:14px;color:var(--ac)}#cap p{margin:0;font-size:13px;line-height:1.4}
+#bar{height:4px;background:#2a2d33;border-radius:2px;margin:9px 0 8px;overflow:hidden}#bar i{display:block;height:100%;width:0;background:var(--ac)}
+button{background:#2a2d33;color:var(--fg);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;margin-right:6px}
+@media(max-width:560px){#pr{width:150px}#t{max-width:50vw}}
+</style></head><body>
+<div class="p" id="t"><b>Automated lance slag cleaning</b><div>Drag to orbit · scroll/pinch to zoom</div><div id="pn"></div></div>
+<div class="p" id="pr"><small>Slag thickness profile (tip → top)</small><canvas id="pc" width="400" height="160"></canvas><small id="pv"></small></div>
+<div class="p" id="cap"><h3 id="ch"></h3><p id="cp"></p><div id="bar"><i id="bi"></i></div><button id="pb">Pause</button><button id="rb">Replay</button></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(devicePixelRatio,2));document.body.prepend(R.domElement);
+const S=new THREE.Scene();S.background=new THREE.Color(0x0b0c0f);S.fog=new THREE.Fog(0x0b0c0f,20,50);
+const C=new THREE.PerspectiveCamera(42,1,.1,100);
+let az=.75,el=.2,dist=17;const tgt=new THREE.Vector3(0,3.4,0);
+function cam(){C.position.set(tgt.x+dist*Math.sin(az)*Math.cos(el),tgt.y+dist*Math.sin(el),tgt.z+dist*Math.cos(az)*Math.cos(el));C.lookAt(tgt)}
+function size(){R.setSize(innerWidth,innerHeight);C.aspect=innerWidth/innerHeight;C.updateProjectionMatrix();dist=innerWidth<innerHeight?27:17;cam()}
+addEventListener('resize',size);size();
+let drag=false,px=0,py=0;
+R.domElement.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY});
+addEventListener('pointerup',()=>drag=false);
+addEventListener('pointermove',e=>{if(!drag)return;az-=(e.clientX-px)*.007;el=Math.max(-.05,Math.min(1.2,el+(e.clientY-py)*.005));px=e.clientX;py=e.clientY;cam()});
+R.domElement.addEventListener('wheel',e=>{dist=Math.max(8,Math.min(40,dist+e.deltaY*.02));cam();e.preventDefault()},{passive:false});
+let pinch=0;R.domElement.addEventListener('touchmove',e=>{if(e.touches.length==2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(pinch){dist=Math.max(8,Math.min(40,dist*pinch/d));cam()}pinch=d}},{passive:true});
+R.domElement.addEventListener('touchend',()=>pinch=0);
+
+// lights
+S.add(new THREE.HemisphereLight(0x8892a8,0x1a1410,.55));
+const dl=new THREE.DirectionalLight(0xffffff,.8);dl.position.set(6,10,7);S.add(dl);
+const hot=new THREE.PointLight(0xff6a1a,1.2,12);hot.position.set(0,1.2,0);S.add(hot);
+
+// constants
+const L=7,r0=.35,N=56,SL=6.4,segH=SL/N,toolY=2.2,jawY=1.05,G0=-4.2,G1=2.2,G2=jawY-6.4,G3=jawY;
+const TH=[];for(let i=0;i<N;i++){const s=(i+.5)*segH;TH.push(.16+.3*(.5+.5*Math.sin(s*1.7+1))*(.55+.45*(1-s/SL))+.05*Math.sin(s*7.3))}
+const std=(c,m=.6,r=.5)=>new THREE.MeshStandardMaterial({color:c,metalness:m,roughness:r});
+
+// environment
+const floor=new THREE.Mesh(new THREE.BoxGeometry(26,.2,26),std(0x25262a,.3,.9));floor.position.y=-.1;S.add(floor);
+const grid=new THREE.GridHelper(26,26,0x3a3c42,0x2e3036);grid.position.y=.005;S.add(grid);
+const slot=new THREE.Mesh(new THREE.BoxGeometry(1.5,.02,1.5),new THREE.MeshBasicMaterial({color:0x050505}));slot.position.y=.012;S.add(slot);
+const w1=new THREE.Mesh(new THREE.BoxGeometry(.4,12,26),std(0x1b1d21,.5,.7));w1.position.set(-12,6,0);S.add(w1);
+const w2=new THREE.Mesh(new THREE.BoxGeometry(26,12,.4),std(0x1b1d21,.5,.7));w2.position.set(0,6,-12);S.add(w2);
+
+// lance
+const lance=new THREE.Group();S.add(lance);
+const steel=new THREE.Mesh(new THREE.CylinderGeometry(r0,r0,L,32),std(0x7d838c,.8,.35));steel.position.y=L/2;lance.add(steel);
+const flange=new THREE.Mesh(new THREE.CylinderGeometry(r0+.12,r0+.12,.25,32),std(0x5a5f66));flange.position.y=L;lance.add(flange);
+const segs=[],grv=[],spawned=[],rings=[];const ringMat=new THREE.MeshBasicMaterial({color:0x30e0ff});
+const grvMat=new THREE.MeshBasicMaterial({color:0x000000});
+for(let i=0;i<N;i++){
+  const r=r0+TH[i],s=(i+.5)*segH,k=1-s/SL;
+  const m=new THREE.MeshStandardMaterial({color:new THREE.Color().setHSL(.07,.15,.1+.05*Math.random()),roughness:.95,metalness:.1,emissive:0x8a2a08,emissiveIntensity:.15+.3*k});
+  const c=new THREE.Mesh(new THREE.CylinderGeometry(r,r,segH*1.02,24),m);c.position.y=s;lance.add(c);segs.push(c);
+  const g=[];for(const sd of[-1,1]){const b=new THREE.Mesh(new THREE.BoxGeometry(.07,segH*1.04,TH[i]+.02),grvMat);b.position.set(0,s,sd*(r0+TH[i]/2+.004));b.visible=false;lance.add(b);g.push(b)}
+  grv.push(g);spawned.push(false);
+  const rg=new THREE.Mesh(new THREE.TorusGeometry(r+.006,.012,6,40),ringMat);rg.rotation.x=Math.PI/2;rg.position.y=s;rg.visible=false;lance.add(rg);rings.push(rg);
+}
+
+// cutting blades (along ±z, fixed height)
+const blades=[];
+for(const sd of[-1,1]){
+  const g=new THREE.Group();
+  const cone=new THREE.Mesh(new THREE.ConeGeometry(.09,.9,10),std(0xdfe3ea,.9,.2));cone.rotation.x=-sd*Math.PI/2;cone.position.z=sd*.45;g.add(cone);
+  const rod=new THREE.Mesh(new THREE.BoxGeometry(.25,.25,2.6),std(0x3d4148));rod.position.z=sd*2.2;g.add(rod);
+  const car=new THREE.Mesh(new THREE.BoxGeometry(.8,1.2,.4),std(0x2e3238));car.position.z=sd*3.6;g.add(car);
+  g.position.y=toolY;S.add(g);blades.push(g);
+}
+// laser profiling blocks: same ±z axis as the cutters, far behind them, slightly higher so beams clear the cutter carriages
+const LY=toolY+.9,LZ=8.5,lasers=[];
+const lbeamMat=new THREE.MeshBasicMaterial({color:0xff2030,transparent:true,opacity:.3,side:THREE.DoubleSide,depthWrite:false});const KF=40,lineMat=new THREE.LineBasicMaterial({color:0xff9aa5});
+for(const sd of[-1,1]){
+  const g=new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(2.2,.9,1.2),std(0x2a3a5a,.6,.4)));
+  const lens=new THREE.Mesh(new THREE.BoxGeometry(2,.08,.1),new THREE.MeshBasicMaterial({color:0xff3040}));lens.position.z=-sd*.62;g.add(lens);
+  g.position.set(0,LY,sd*LZ);S.add(g);
+  for(const x of[-.6,.6]){const post=new THREE.Mesh(new THREE.BoxGeometry(.2,LY-.45,.4),std(0x2e3238));post.position.set(x,(LY-.45)/2,sd*LZ);S.add(post)}
+  const fg=new THREE.BufferGeometry();fg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(KF*18),3));
+  const beam=new THREE.Mesh(fg,lbeamMat);beam.frustumCulled=false;beam.visible=false;S.add(beam);
+  const lg=new THREE.BufferGeometry();lg.setAttribute('position',new THREE.BufferAttribute(new Float32Array((KF+1)*3),3));
+  const spot=new THREE.Line(lg,lineMat);spot.frustumCulled=false;spot.visible=false;S.add(spot);
+  lasers.push({beam,spot,sd,fg,lg});
+}
+// holder jaws: on the same ±z axis as the cutters, just beneath them
+const jaws=[];
+// unit half-ring (inner radius 1, outer 1.4, height .9) so the jaw wraps the round slag/lance
+const hs=new THREE.Shape();hs.absarc(0,0,1.4,-Math.PI/2,Math.PI/2,false);hs.absarc(0,0,1,Math.PI/2,-Math.PI/2,true);
+const halfGeo=new THREE.ExtrudeGeometry(hs,{depth:.9,bevelEnabled:false,curveSegments:40});halfGeo.rotateX(-Math.PI/2);halfGeo.translate(0,-.45,0);
+for(const sd of[-1,1]){
+  const j=new THREE.Group();
+  const jaw=new THREE.Mesh(halfGeo,std(0xd98a2b,.5,.4));jaw.rotation.y=-sd*Math.PI/2;j.add(jaw);
+  const arm=new THREE.Mesh(new THREE.BoxGeometry(.28,.28,2.6),std(0xb8741f,.5,.5));j.add(arm);
+  const car=new THREE.Mesh(new THREE.BoxGeometry(.8,1.0,.4),std(0x2e3238));j.add(car);
+  j.userData={pad:jaw,arm,car};
+  j.position.y=jawY;S.add(j);jaws.push(j);
+}
+
+// pneumatic cylinders: barrel (fixed), piston + rod (moving), end caps, side ports, hoses to a solenoid valve block
+const cyls=[];
+function makeCyl(sd,y,zf,len,kind){
+  const bm=new THREE.MeshStandardMaterial({color:0x2f7fd0,metalness:.4,roughness:.3,transparent:true,opacity:.38,depthWrite:false});
+  const mk=(geo,mat,yy,z)=>{const m=new THREE.Mesh(geo,mat);m.rotation.x=Math.PI/2;m.position.set(0,yy,sd*z);S.add(m);return m};
+  mk(new THREE.CylinderGeometry(.22,.22,len,24,1,true),bm,y,zf+len/2);
+  const cm=std(0x8a9099,.8,.3);
+  mk(new THREE.CylinderGeometry(.27,.27,.14,24),cm,y,zf);mk(new THREE.CylinderGeometry(.27,.27,.14,24),cm,y,zf+len);
+  const piston=mk(new THREE.CylinderGeometry(.2,.2,.16,24),std(0xdfe3ea,.9,.2),y,zf+.1);
+  const rod=mk(new THREE.CylinderGeometry(.06,.06,1,12),std(0xe8ecf2,.95,.15),y,zf);
+  const zm=zf+len/2,vb=new THREE.Mesh(new THREE.BoxGeometry(.5,.5,.8),std(0x2a2d33,.4,.5));vb.position.set(1.65,y,sd*zm);S.add(vb);
+  const pipe=new THREE.Mesh(new THREE.CylinderGeometry(.05,.05,y-.25,10),std(0x7fb7ff,.6,.3));pipe.position.set(1.65,(y-.25)/2,sd*zm);S.add(pipe);
+  const hose=(z0,zv,col)=>{const M=new THREE.MeshStandardMaterial({color:col,emissive:col,emissiveIntensity:0,roughness:.5});
+    const cv=new THREE.CatmullRomCurve3([[.24,y,sd*z0],[.8,y,sd*z0],[1.2,y,sd*(z0+zv)/2],[1.4,y,sd*zv]].map(a=>new THREE.Vector3(...a)));
+    S.add(new THREE.Mesh(new THREE.TubeGeometry(cv,24,.04,8),M));return M};
+  const capM=hose(zf+len-.2,zm+.2,0x20b8ff),rodM=hose(zf+.2,zm-.2,0xff9a20);
+  const sm2=std(0x3a3d43);
+  for(const z of[zf+.5,zf+len-.5]){
+    if(y>1.5){const b=new THREE.Mesh(new THREE.BoxGeometry(1.2,.12,.3),sm2);b.position.set(0,y-.28,sd*z);S.add(b);
+      for(const x of[-.5,.5]){const l=new THREE.Mesh(new THREE.BoxGeometry(.15,y-.28,.3),sm2);l.position.set(x,(y-.28)/2,sd*z);S.add(l)}}
+    else{const b=new THREE.Mesh(new THREE.BoxGeometry(.5,y-.3,.3),sm2);b.position.set(0,(y-.3)/2,sd*z);S.add(b)}
+  }
+  cyls.push({sd,zf,len,kind,piston,rod,capM,rodM});
+}
+for(const sd of[-1,1]){makeCyl(sd,toolY,7.45,3.0,'b');makeCyl(sd,jawY,8.3,3.0,'j')}
+function cylUpd(bv,jv,now){
+  const pulse=.9+.6*Math.sin(now/90);
+  cyls.forEach(c=>{
+    const isB=c.kind=='b',v=isB?bv:jv;
+    const e=isB?clamp((3.4-bt)/3.03,0,1):clamp(1-jz/3.0,0,1);
+    const cb=isB?bt+3.8:jz+jr*1.4+3.4;
+    const pz=c.zf+.1+(1-e)*(c.len-.2);
+    c.piston.position.z=c.sd*pz;
+    c.rod.scale.y=Math.max(.01,Math.abs(pz-cb));c.rod.position.z=c.sd*(pz+cb)/2;
+    const ext=v<-.04,ret=v>.04;
+    c.capM.emissiveIntensity=ext?pulse:(!ret&&e>.5)?.35:0;
+    c.rodM.emissiveIntensity=ret?pulse:0;
+  });
+  const stt=(v,isE)=>v<-.04?'Extending':v>.04?'Retracting':(isE?'Extended':'Retracted');
+  $('pn').textContent='Air 6.0 bar · Cutter cylinders: '+stt(bv,bt<3.3)+' · Jaw cylinders: '+stt(jv,jz<2.9);
+}
+
+// falling slag chunks
+const chunks=[];
+function spawn(i){
+  const t=TH[i];
+  for(const sd of[-1,1]){
+    const m=new THREE.MeshStandardMaterial({color:0x2a2420,roughness:.9,emissive:0xff5a10,emissiveIntensity:1.6});
+    const b=new THREE.Mesh(new THREE.BoxGeometry(t,segH*.95,.5+Math.random()*.25),m);
+    b.position.set(sd*(r0+t/2),jawY,(Math.random()-.5)*.3);
+    b.userData={v:new THREE.Vector3(sd*(.5+Math.random()*.9),-.3,(Math.random()-.5)*.8),w:new THREE.Vector3(Math.random()*4,Math.random()*4,Math.random()*4),age:0,h:t/2};
+    S.add(b);chunks.push(b);
+  }
+}
+
+// timeline
+const PH=[
+ ['Lance in position','The lance is in place. Two laser sensor blocks sit on the same axis as the cutters, further back.',3],
+ ['Laser thickness profiling','The lance rises past the two lasers. Each laser emits a flat, parallel beam that sweeps a line across the slag surface, building the thickness profile slice by slice.',14],
+ ['Profile complete · lance lowers','The thickness profile is stored. The lance returns down so the cutting pass can start from the beginning.',5],
+ ['Profile loaded · cutters ready','The measured thickness profile drives the tools. The two cutting blades move into position.',3.5],
+ ['Pass 1 · Cutting','The lance rises while the two sharp blades stay at a fixed height. Blade depth follows the thickness profile, scoring the slag along two lines.',16],
+ ['Blades retract · lance lowers','Cutting is complete. The blades pull back and the lance returns down for the second pass.',5],
+ ['Holder jaws advance','Two holder jaws, on the same axis as the cutters but just beneath them, move in toward the lance.',3.5],
+ ['Pass 2 · Holding & stripping','The jaws grip the two cut slag halves at the local slag thickness. As the lance rises, the slag rubs off the lance and falls away.',16],
+ ['Jaws retract','The jaws open and pull back.',3.5],
+ ['Lance cleaned','The lance is free of slag and ready for the next cycle.',4]];
+const TOT=PH.reduce((a,b)=>a+b[2],0);
+let T=0,playing=true,last=performance.now();
+let bt=3.4,jz=3.0,jr=.9;
+const sm=p=>p*p*(3-2*p),lerp=(a,b,t)=>a+(b-a)*t,clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const thAt=s=>TH[clamp(Math.floor(s/segH),0,N-1)];
+const $=id=>document.getElementById(id);
+$('pb').onclick=()=>{playing=!playing;$('pb').textContent=playing?'Pause':'Play'};
+$('rb').onclick=()=>{T=0;playing=true;$('pb').textContent='Pause';
+  chunks.forEach(c=>{S.remove(c);c.geometry.dispose();c.material.dispose()});chunks.length=0;spawned.fill(false);bt=3.4;jz=3.0;jr=.9};
+const pc=$('pc'),px2=pc.getContext('2d');
+function drawProfile(s,from){
+  const w=pc.width,h=pc.height;px2.clearRect(0,0,w,h);
+  px2.strokeStyle='#ff7a2a';px2.lineWidth=3;px2.beginPath();
+  let st=false;TH.forEach((t,i)=>{if((i+.5)*segH<from)return;const x=i/(N-1)*w,y=h-8-(t/.55)*(h-16);st?px2.lineTo(x,y):px2.moveTo(x,y);st=true});px2.stroke();
+  if(s!=null){const x=clamp(s/SL,0,1)*w;px2.strokeStyle='#fff';px2.lineWidth=2;px2.beginPath();px2.moveTo(x,0);px2.lineTo(x,h);px2.stroke()}
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=Math.min((now-last)/1000,.05);last=now;if(playing)T+=dt;
+  let rp=0,lt=T;while(rp<PH.length-1&&lt>=PH[rp][2]){lt-=PH[rp][2];rp++}
+  const ph=rp-3,p=clamp(lt/PH[rp][2],0,1);
+  let g;
+  if(rp==0)g=LY-6.4;else if(rp==1)g=LY-6.4+6.4*p;else if(rp==2)g=lerp(LY,G0,sm(p));
+  else{g=[G0,G0+(G1-G0)*p,lerp(G1,G2,sm(p)),G2,G2+(G1-G0)*p,G3,G3][ph];if(ph==1)g=G0+6.4*p}
+  lance.position.y=g;
+  const sB=toolY-g,sJ=jawY-g,sL=LY-g;
+  // blades
+  const bEng=(ph==0&&lt>1.8)||(ph==1&&p<.985);
+  const bTarget=bEng?r0+.1*thAt(clamp(sB,0,SL-.01)):3.4;
+  const bv=bTarget-bt;bt+=bv*Math.min(1,dt*5);
+  blades[0].position.z=-bt;blades[1].position.z=bt;
+  const lOn=rp==1&&p<.99,rL=(sL>SL||sL<0)?r0:r0+thAt(sL);
+  lasers.forEach(l=>{l.beam.visible=l.spot.visible=lOn;if(!lOn)return;
+    const d0=LZ-.6,Wh=1.0,P=[],Q=[];
+    for(let k=0;k<=KF;k++){const x=-Wh+2*Wh*k/KF,xc=clamp(x,-rL,rL);P.push([x,l.sd*(Math.abs(x)<rL?Math.sqrt(rL*rL-x*x):0)]);Q.push([xc,l.sd*Math.sqrt(Math.max(0,rL*rL-xc*xc))])}
+    const fa=l.fg.attributes.position.array,la=l.lg.attributes.position.array,z0=l.sd*d0;
+    for(let k=0;k<KF;k++){const a=P[k],b=P[k+1];fa.set([a[0],LY,z0,b[0],LY,z0,a[0],LY,a[1],b[0],LY,z0,b[0],LY,b[1],a[0],LY,a[1]],k*18)}
+    for(let k=0;k<=KF;k++){la[k*3]=Q[k][0];la[k*3+1]=LY;la[k*3+2]=Q[k][1]}
+    l.fg.attributes.position.needsUpdate=l.lg.attributes.position.needsUpdate=true});
+  lbeamMat.opacity=.25+.1*Math.sin(now/40);
+  // jaws (±x)
+  const jEng=(ph==3&&lt>.8)||(ph==4&&p<.985);
+  const k5=Math.min(1,dt*5);
+  const jv=(jEng?0:3.0)-jz;jz+=jv*k5;
+  jr+=((jEng?r0+thAt(clamp(sJ,0,SL-.01)):.9)-jr)*k5;
+  jaws.forEach((j,n)=>{const sd=n?1:-1,u=j.userData;j.position.z=sd*jz;u.pad.scale.set(jr,1,jr);u.arm.position.z=sd*(jr*1.4+1.3);u.car.position.z=sd*(jr*1.4+3.2)});
+  cylUpd(bv,jv,now);
+  // segments
+  for(let i=0;i<N;i++){
+    const c=(i+.5)*segH;
+    const cut=ph>=2||(ph==1&&c>sB),rem=ph>=5||(ph==4&&c>sJ);
+    segs[i].visible=!rem;grv[i][0].visible=grv[i][1].visible=cut&&!rem;
+    rings[i].visible=(rp>=2||(rp==1&&c>=sL))&&!rem;
+    if(rem&&!spawned[i]){spawned[i]=true;if(ph==4)spawn(i)}
+    if(!rem)segs[i].material.emissiveIntensity=(.15+.3*(1-c/SL))*(.85+.15*Math.sin(now/300+i));
+  }
+  // chunks
+  let heat=0;
+  for(const b of chunks){
+    const u=b.userData;u.age+=dt;u.v.y-=9*dt;b.position.addScaledVector(u.v,dt);
+    b.rotation.x+=u.w.x*dt;b.rotation.y+=u.w.y*dt;b.rotation.z+=u.w.z*dt;
+    if(b.position.y<u.h){b.position.y=u.h;u.v.y*=-.2;u.v.x*=.5;u.v.z*=.5;u.w.multiplyScalar(.6)}
+    const k=Math.max(0,1-u.age/10);b.material.emissiveIntensity=1.8*k;heat=Math.max(heat,k);
+  }
+  hot.intensity=.2+1.6*heat*(.9+.1*Math.sin(now/90));
+  // HUD
+  $('ch').textContent=PH[rp][0];$('cp').textContent=PH[rp][1];
+  $('bi').style.width=Math.min(100,(T/TOT)*100)+'%';
+  const s=rp==1?sL:ph==1||(ph==0&&lt>1.8)?sB:(ph>=3&&ph<=4)?sJ:null;
+  drawProfile(s,rp==1?sL:rp<1?1e9:0);
+  $('pv').textContent=s!=null&&s>=0&&s<=SL?(rp==1?'Laser reading: ':'Thickness at tool: ')+(thAt(s)*100).toFixed(0)+' (relative units)':'';
+  R.render(S,C);
+}
+cam();requestAnimationFrame(frame);
+</script></body></html>
